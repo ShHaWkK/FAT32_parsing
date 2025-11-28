@@ -1,28 +1,22 @@
-//! Gestion d'une entrée de répertoire FAT32 en format "8.3" (sans long filename).
+//! Entrées de répertoire FAT32 
 
 extern crate alloc;
 
 use alloc::string::String;
 
-/// Attributs FAT d'une entrée (fichier ou répertoire).
+/// Attributs FAT d'une entrée de répertoire.
 #[derive(Debug, Clone, Copy)]
 pub struct Attributes {
-    /// Fichier en lecture seule.
     pub read_only: bool,
-    /// Fichier masqué.
     pub hidden: bool,
-    /// Fichier système.
     pub system: bool,
-    /// Label de volume (non traité comme fichier dans ce projet).
     pub volume_id: bool,
-    /// Indique que l'entrée est un répertoire.
     pub directory: bool,
-    /// Indique que l'entrée est marquée comme archivable.
     pub archive: bool,
 }
 
 impl Attributes {
-    /// Construit la structure d'attributs à partir de l'octet brut.
+    /// Construit les attributs à partir de l'octet brut.
     pub fn from_byte(b: u8) -> Self {
         Self {
             read_only: b & 0x01 != 0,
@@ -35,36 +29,28 @@ impl Attributes {
     }
 }
 
-/// Entrée de répertoire FAT32 avec un nom court (8.3).
+/// Entrée de répertoire FAT32 avec nom court
 #[derive(Debug, Clone)]
 pub struct DirEntry {
-    /// Nom affiché du fichier ou du répertoire (ex: `HELLO.TXT`).
     pub name: String,
-    /// Attributs FAT associés à l'entrée.
     pub attrs: Attributes,
-    /// Numéro de cluster de départ (fichier ou répertoire).
     pub first_cluster: u32,
-    /// Taille logique du fichier en octets (0 pour un répertoire).
     pub size: u32,
 }
 
 impl DirEntry {
     /// Parse une entrée de 32 octets.
-    ///
-    /// Retourne `None` si l'entrée est vide, supprimée, ou un label de volume.
     pub fn parse(entry: &[u8]) -> Option<Self> {
         if entry.len() < 32 {
             return None;
         }
 
-        // 0x00 = jamais utilisé, 0xE5 = supprimé
         if entry[0] == 0x00 || entry[0] == 0xE5 {
             return None;
         }
 
         let attrs = Attributes::from_byte(entry[11]);
         if attrs.volume_id {
-            // Label de volume, ignoré ici.
             return None;
         }
 
@@ -106,20 +92,18 @@ impl DirEntry {
         })
     }
 
-    /// Indique si l'entrée représente un répertoire.
+    /// Indique si l'entrée est un répertoire.
     pub fn is_dir(&self) -> bool {
         self.attrs.directory
     }
 
-    /// Indique si l'entrée représente un fichier.
+    /// Indique si l'entrée est un fichier.
     pub fn is_file(&self) -> bool {
         !self.attrs.directory
     }
 }
 
-/// Décodage ASCII basique avec suppression des espaces de fin.
-///
-/// Utilisé pour les noms courts FAT (nom + extension).
+/// Décodage ASCII simple avec suppression des espaces de fin.
 fn decode_ascii_trim(bytes: &[u8]) -> String {
     let mut end = bytes.len();
     while end > 0 && bytes[end - 1] == b' ' {

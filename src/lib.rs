@@ -1,6 +1,13 @@
 //! Parseur FAT32 
 //!
-//! Cette bibliothèque est "no_std" (hors tests) et ne repose que sur "core" et "alloc"
+//! Cette bibliothèque travaille uniquement en lecture :
+//! - inspection de l'en-tête FAT32 (BPB),
+//! - parcours de la FAT et des clusters,
+//! - listage des répertoires,
+//! - lecture de fichiers à partir de chemins absolus
+//!
+//! Elle est "no_std" (hors tests) et ne dépend que de "core" et "alloc"
+
 
 
 #![cfg_attr(not(test), no_std)]
@@ -13,20 +20,28 @@ mod dir_entry;
 
 pub use dir_entry::{Attributes, DirEntry};
 
-/// Erreurs possibles lors de la lecture du système de fichiers FAT32.
+/// Erreurs possibles lors de la lecture du système de fichiers FAT32
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatError {
+    /// Le buffer ne contient pas assez de données pour un volume valide
     BufferTooSmall,
+    /// Les champs de l'en-tête ne correspondent pas à un volume FAT32
     NotFat32,
+    /// Tentative de lecture en dehors du buffer 
     OutOfBounds,
+    /// Numéro de cluster invalide (par exemple < 2).
     InvalidCluster,
+    /// On tente de lire un répertoire comme un fichier.
     NotAFile,
+    /// On tente de lister un fichier comme un répertoire
     NotADirectory,
+    /// Le chemin ne correspond à aucune entrée connue
     PathNotFound,
+    /// Cas pour les erreurs
     Other,
 }
 
-/// Vue en lecture seule d'un volume FAT32 stocké dans un buffer mémoire.
+/// Vue en lecture seule d'un volume FAT32 stocké dans un buffer mémoire
 pub struct Fat32<'a> {
     disk: &'a [u8],
     bytes_per_sector: u16,
@@ -80,12 +95,12 @@ impl<'a> Fat32<'a> {
         })
     }
 
-    /// Liste le contenu du répertoire racine.
+    /// Liste le contenu du répertoire racine
     pub fn list_root(&self) -> Result<Vec<DirEntry>, FatError> {
         self.list_dir_cluster(self.root_cluster)
     }
 
-    /// Liste un répertoire à partir d'un chemin absolu (ex: `/DIR`).
+    /// Liste un répertoire à partir d'un chemin absolu (ex: "/DIR")
     pub fn list_dir_path(&self, path: &str) -> Result<Vec<DirEntry>, FatError> {
         if path == "/" {
             return self.list_root();
@@ -102,7 +117,7 @@ impl<'a> Fat32<'a> {
         self.list_dir_cluster(entry.first_cluster)
     }
 
-    /// Lit un fichier à partir de son chemin absolu.
+    /// Lit un fichier à partir de son chemin absolu
     pub fn read_file_by_path(
         &self,
         path: &str,
@@ -120,7 +135,7 @@ impl<'a> Fat32<'a> {
         Ok(Some(content))
     }
 
-    /// Résout un chemin absolu en entrée de répertoire (sans lire son contenu).
+    /// Résout un chemin absolu en entrée de répertoire (sans lire son contenu)
     pub fn open_path(&self, path: &str) -> Result<Option<DirEntry>, FatError> {
         if !path.starts_with('/') {
             return Err(FatError::Other);
@@ -153,7 +168,7 @@ impl<'a> Fat32<'a> {
         Ok(last_entry)
     }
 
-    /// Lit un fichier à partir de l'entrée de répertoire associée.
+    /// Lit un fichier à partir de l'entrée de répertoire associée
     pub fn read_file(&self, entry: &DirEntry) -> Result<Vec<u8>, FatError> {
         if !entry.is_file() {
             return Err(FatError::NotAFile);

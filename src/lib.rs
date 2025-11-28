@@ -1,3 +1,8 @@
+//! Parseur FAT32 
+//!
+//! Cette bibliothèque est "no_std" (hors tests) et ne repose que sur "core" et "alloc"
+
+
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;

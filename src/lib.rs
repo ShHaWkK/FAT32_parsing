@@ -8,39 +8,22 @@ mod dir_entry;
 
 pub use dir_entry::{Attributes, DirEntry};
 
-/// Erreurs possibles pendant l'analyse ou la lecture d'un dump FAT32.
+/// Erreurs possibles lors de la lecture du système de fichiers FAT32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatError {
-    /// Le buffer fourni est trop petit pour contenir les métadonnées nécessaires.
     BufferTooSmall,
-    /// Le dump ne ressemble pas à un volume FAT32 valide.
     NotFat32,
-    /// Lecture en dehors des limites du buffer.
     OutOfBounds,
-    /// Numéro de cluster invalide (ex. < 2).
     InvalidCluster,
-    /// L'entrée visée n'est pas un fichier alors qu'on essaie de la lire.
     NotAFile,
-    /// L'entrée visée n'est pas un répertoire alors qu'on essaie de la lister.
     NotADirectory,
-    /// Le chemin fourni ne correspond à aucune entrée.
     PathNotFound,
-    /// Erreur générique pour les cas non couverts.
     Other,
 }
 
-/// Vue en lecture seule d'un volume FAT32 contenu dans un dump mémoire.
-///
-/// Le principe d'utilisation est simple :
-///
-///  Le binaire lit un fichier image FAT32 (`disk.img`) dans un `Vec<u8>`.
-/// On construit un [`Fat32`] avec un `&[u8]` vers ce buffer.
-///  On utilise les méthodes de haut niveau 
-/// pour interagir avec le système de fichiers.
+/// Vue en lecture seule d'un volume FAT32 stocké dans un buffer mémoire.
 pub struct Fat32<'a> {
     disk: &'a [u8],
-
-    // Informations extraites du premier secteur (BPB simplifié).
     bytes_per_sector: u16,
     sectors_per_cluster: u8,
     reserved_sectors: u16,
@@ -50,8 +33,7 @@ pub struct Fat32<'a> {
 }
 
 impl<'a> Fat32<'a> {
-    /// Construit une instance à partir d'un dump complet de volume FAT32 en mémoire.
-    /// Le buffer `disk` doit contenir l'intégralité du volume (comme un fichier .img).
+    /// Construit une vue FAT32 depuis un dump en mémoire.
     pub fn new(disk: &'a [u8]) -> Result<Self, FatError> {
         if disk.len() < 512 {
             return Err(FatError::BufferTooSmall);
@@ -78,7 +60,6 @@ impl<'a> Fat32<'a> {
         let root_cluster =
             u32::from_le_bytes([b[44], b[45], b[46], b[47]]);
 
-        // En FAT32, `sectors_per_fat` doit être non nul.
         if sectors_per_fat == 0 {
             return Err(FatError::NotFat32);
         }
@@ -94,12 +75,12 @@ impl<'a> Fat32<'a> {
         })
     }
 
-    /// Liste le contenu du répertoire racine du volume.
+    /// Liste le contenu du répertoire racine.
     pub fn list_root(&self) -> Result<Vec<DirEntry>, FatError> {
         self.list_dir_cluster(self.root_cluster)
     }
 
-    /// Liste le contenu d'un répertoire à partir de son chemin absolu.
+    /// Liste un répertoire à partir d'un chemin absolu (ex: `/DIR`).
     pub fn list_dir_path(&self, path: &str) -> Result<Vec<DirEntry>, FatError> {
         if path == "/" {
             return self.list_root();
@@ -116,12 +97,7 @@ impl<'a> Fat32<'a> {
         self.list_dir_cluster(entry.first_cluster)
     }
 
-    /// Lit le contenu d'un fichier à partir de son chemin absolu.
-    ///
-    /// Retourne :
-    /// - `Ok(Some(Vec<u8>))` si le fichier existe,
-    /// - `Ok(None)` si le chemin ne correspond à rien,
-    /// - `Err(_)` si le chemin existe mais ne désigne pas un fichier.
+    /// Lit un fichier à partir de son chemin absolu.
     pub fn read_file_by_path(
         &self,
         path: &str,
@@ -139,7 +115,7 @@ impl<'a> Fat32<'a> {
         Ok(Some(content))
     }
 
-    /// Résout un chemin absolu (ex: `/HELLO.TXT` ou `/DIR/FILE.TXT`) en entrée de répertoire.
+    /// Résout un chemin absolu en entrée de répertoire (sans lire son contenu).
     pub fn open_path(&self, path: &str) -> Result<Option<DirEntry>, FatError> {
         if !path.starts_with('/') {
             return Err(FatError::Other);
@@ -148,7 +124,6 @@ impl<'a> Fat32<'a> {
         let mut current_cluster = self.root_cluster;
         let mut last_entry: Option<DirEntry> = None;
 
-        // Découpe du chemin en segments non vides.
         let parts = path.split('/').filter(|s| !s.is_empty());
 
         for part in parts {
@@ -173,7 +148,7 @@ impl<'a> Fat32<'a> {
         Ok(last_entry)
     }
 
-    /// Lit le contenu d'un fichier à partir de l'entrée de répertoire correspondante.
+    /// Lit un fichier à partir de l'entrée de répertoire associée.
     pub fn read_file(&self, entry: &DirEntry) -> Result<Vec<u8>, FatError> {
         if !entry.is_file() {
             return Err(FatError::NotAFile);
@@ -198,7 +173,7 @@ impl<'a> Fat32<'a> {
         Ok(data)
     }
 
-    // ---------- Méthodes internes : calculs d'offsets, FAT, etc. ----------
+    // ---------- Méthodes internes ----------
 
     fn bytes_per_sector(&self) -> usize {
         self.bytes_per_sector as usize
@@ -274,7 +249,6 @@ impl<'a> Fat32<'a> {
 
             let next = self.read_fat_entry(current)?;
             if next >= 0x0FFF_FFF8 {
-                // Fin de chaîne.
                 break;
             }
 
@@ -306,7 +280,6 @@ impl<'a> Fat32<'a> {
         Ok(entries)
     }
 
-    /// Normalise un nom pour la comparaison (ASCII upper-case).
     fn normalize_name(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         for ch in s.chars() {
@@ -315,38 +288,34 @@ impl<'a> Fat32<'a> {
         out
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Construit un petit dump FAT32 en mémoire pour les tests.
-    ///
-    /// Layout :
-    /// - secteur 0 : entête avec les champs FAT32 nécessaires,
+    /// Mini volume FAT32 en mémoire :
+    /// - secteur 0 : BPB simplifié,
     /// - secteur 1 : FAT,
-    /// - secteur 2 : répertoire racine avec une entrée HELLO.TXT,
-    /// - secteur 3 : données du fichier ("HELLO").
+    /// - secteur 2 : racine avec HELLO.TXT,
+    /// - secteur 3 : contenu "HELLO".
     fn build_test_image() -> [u8; 2048] {
         const SECTOR_SIZE: usize = 512;
         const NUM_SECTORS: usize = 4;
         let mut disk = [0u8; SECTOR_SIZE * NUM_SECTORS];
 
+        // secteur 0 : BPB
         {
             let b = &mut disk[0..SECTOR_SIZE];
 
-            // bytes_per_sector = 512 (0x0200 LE)
-            b[11] = 0x00;
+            b[11] = 0x00; // bytes_per_sector = 512 (0x0200 LE)
             b[12] = 0x02;
 
-            // sectors_per_cluster = 1
-            b[13] = 0x01;
+            b[13] = 0x01; // sectors_per_cluster = 1
 
-            // reserved_sectors = 1
-            b[14] = 0x01;
+            b[14] = 0x01; // reserved_sectors = 1
             b[15] = 0x00;
 
-            // num_fats = 1
-            b[16] = 0x01;
+            b[16] = 0x01; // num_fats = 1
 
             // sectors_per_fat = 1 (u32 LE)
             b[36] = 0x01;
@@ -361,63 +330,54 @@ mod tests {
             b[47] = 0x00;
         }
 
-        // --- secteur 1 : FAT ---
+        // secteur 1 : FAT
         {
-            let fat_start = SECTOR_SIZE; // reserved_sectors(1) * 512
+            let fat_start = SECTOR_SIZE;
             let fat = &mut disk[fat_start..fat_start + SECTOR_SIZE];
 
             let eoc: u32 = 0x0FFF_FFFF;
             let eoc_bytes = eoc.to_le_bytes();
 
-            // cluster 2 (racine) → EOC
+            // cluster 2 (racine) -> EOC
             let c2_offset = 2 * 4;
             fat[c2_offset..c2_offset + 4].copy_from_slice(&eoc_bytes);
 
-            // cluster 3 (fichier HELLO.TXT) → EOC
+            // cluster 3 (fichier HELLO.TXT) -> EOC
             let c3_offset = 3 * 4;
             fat[c3_offset..c3_offset + 4].copy_from_slice(&eoc_bytes);
         }
 
-        // --- secteur 2 : cluster racine (cluster 2) ---
+        // secteur 2 : racine (cluster 2)
         {
-            // data_start = reserved(1) + num_fats(1) * spf(1) = secteur 2
             let root_cluster_sector = 2;
             let root_off = root_cluster_sector * SECTOR_SIZE;
             let dir = &mut disk[root_off..root_off + SECTOR_SIZE];
 
-            // Entrée 0 : fichier HELLO.TXT
             let mut entry = [0u8; 32];
 
-            // "HELLO   " + "TXT" en 8.3
             entry[0..8].copy_from_slice(b"HELLO   ");
             entry[8..11].copy_from_slice(b"TXT");
 
-            // Attributs : archive (0x20)
-            entry[11] = 0x20;
+            entry[11] = 0x20; // archive
 
-            // first_cluster_high (20..22) = 0
-            entry[20] = 0x00;
+            entry[20] = 0x00; // high
             entry[21] = 0x00;
 
-            // first_cluster_low (26..28) = 3 (cluster 3)
-            entry[26] = 0x03;
+            entry[26] = 0x03; // low = 3
             entry[27] = 0x00;
 
-            // taille = 5 octets ("HELLO")
-            entry[28] = 5;
+            entry[28] = 5; // size = 5 ("HELLO")
             entry[29] = 0;
             entry[30] = 0;
             entry[31] = 0;
 
             dir[0..32].copy_from_slice(&entry);
-
-            // Entrée suivante : 0x00 → fin de répertoire
-            dir[32] = 0x00;
+            dir[32] = 0x00; // fin de répertoire
         }
 
-        // --- secteur 3 : données du fichier (cluster 3) ---
+        // secteur 3 : contenu du fichier (cluster 3)
         {
-            let file_cluster_sector = 3; // data_start(2) + (3-2)
+            let file_cluster_sector = 3;
             let file_off = file_cluster_sector * SECTOR_SIZE;
             let data = &mut disk[file_off..file_off + SECTOR_SIZE];
 
@@ -427,7 +387,6 @@ mod tests {
         disk
     }
 
-    /// Vérifie que `Fat32::new` récupère bien les champs critiques.
     #[test]
     fn parse_header_ok() {
         let disk = build_test_image();
@@ -441,7 +400,6 @@ mod tests {
         assert_eq!(fs.root_cluster, 2);
     }
 
-    /// Vérifie que la racine contient HELLO.TXT et que son contenu est correct.
     #[test]
     fn list_root_and_read_file() {
         let disk = build_test_image();
@@ -460,7 +418,6 @@ mod tests {
         assert_eq!(content, b"HELLO");
     }
 
-    /// Un répertoire inexistant doit renvoyer une erreur PathNotFound.
     #[test]
     fn list_dir_unknown_path_returns_path_not_found() {
         let disk = build_test_image();
@@ -470,7 +427,6 @@ mod tests {
         assert_eq!(err, FatError::PathNotFound);
     }
 
-    /// Un fichier inexistant renvoie Ok(None) via read_file_by_path.
     #[test]
     fn read_file_by_path_unknown_returns_none() {
         let disk = build_test_image();
@@ -483,7 +439,6 @@ mod tests {
         assert!(res.is_none());
     }
 
-    /// Un chemin relatif doit être refusé (on impose les chemins absolus).
     #[test]
     fn open_path_relative_returns_error() {
         let disk = build_test_image();
@@ -493,13 +448,11 @@ mod tests {
         assert_eq!(err, FatError::Other);
     }
 
-    /// Appeler read_file sur une entrée marquée comme répertoire doit renvoyer NotAFile.
     #[test]
     fn read_file_on_directory_returns_not_a_file() {
         let disk = build_test_image();
         let fs = Fat32::new(&disk).expect("fat32 new failed");
 
-        // DirEntry artificiel marquant un répertoire.
         let attrs = Attributes {
             read_only: false,
             hidden: false,

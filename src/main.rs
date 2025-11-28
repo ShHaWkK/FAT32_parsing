@@ -3,27 +3,36 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 
-/// Affiche un message d'aide pour la ligne de commande.
 fn print_usage() {
     eprintln!(
-        "Exemples :
+"Usage:
+  fat32_cli --file <dump_fat32> [--ls <chemin>] [--cat <chemin_fichier>]
+
+Exemples :
   fat32_cli --file disk.img
   fat32_cli --file disk.img --ls /
   fat32_cli --file disk.img --ls DIR
-  fat32_cli --file disk.img --cat HELLO.TXT"
+  fat32_cli --file disk.img --cat HELLO.TXT
+
+Sans --ls / --cat, un shell interactif est lancé :
+  ls [chemin]       - liste un répertoire (absolu ou relatif)
+  cat <chemin>      - affiche un fichier
+  cd [chemin]       - change de répertoire courant
+  pwd               - affiche le répertoire courant
+  help              - affiche l'aide
+  exit              - quitte"
     );
 }
 
-/// Affiche l'aide du mini-shell
 fn print_shell_help() {
     println!(
-        "Commandes disponibles :
-  ls [chemin]       - Liste le contenu d'un répertoire (absolu ou relatif)
-  cat <chemin>      - Affiche le contenu d'un fichier
-  cd [chemin]       - Change de répertoire courant (par défaut : /)
-  pwd               - Affiche le répertoire courant
-  help              - Affiche ce message
-  exit              - Quitte le shell"
+"Commandes :
+  ls [chemin]       - lister un répertoire
+  cat <chemin>      - lire un fichier
+  cd [chemin]       - changer de répertoire courant
+  pwd               - afficher le répertoire courant
+  help              - cette aide
+  exit              - quitter"
     );
 }
 
@@ -34,7 +43,6 @@ fn main() {
     let mut command: Option<String> = None;
     let mut target_path: Option<String> = None;
 
-    // Parsing des arguments.
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--file" | "-f" => {
@@ -64,7 +72,6 @@ fn main() {
         }
     };
 
-    // Lecture du dump FAT32 en mémoire.
     let data =
         fs::read(&dump_path).expect("Impossible de lire le fichier dump");
 
@@ -72,18 +79,15 @@ fn main() {
         Ok(fs) => fs,
         Err(e) => {
             eprintln!(
-                "Erreur lors de l'analyse du dump FAT32: {:?}.
-Le fichier est-il bien formaté en FAT32 ?",
+                "Erreur lors de l'analyse du dump FAT32: {:?}.",
                 e
             );
             return;
         }
     };
 
-    // Si une commande est passée en arguments, on l'exécute une fois…
     match command.as_deref() {
         Some("ls") => {
-            // ici on autorise directement un chemin absolu ou relatif depuis /
             let cwd = "/";
             let path = target_path
                 .as_deref()
@@ -108,28 +112,21 @@ Le fichier est-il bien formaté en FAT32 ?",
             eprintln!("Commande inconnue : {other}");
             print_usage();
         }
-        // sinon on lance le mini-shell
         None => {
             run_shell(&fs);
         }
     }
 }
 
-/// Résout un chemin à partir d'un répertoire courant.
-///
-/// Si path commence par "/", il est traité comme absolu
-/// Sinon, il est interprété relativement à current
-/// On gère aussi "." et ".." de façon classique.
+/// Résout un chemin absolu ou relatif à partir d'un répertoire courant.
 fn resolve_path(current: &str, path: &str) -> String {
     let mut components = Vec::new();
 
-    // Si le chemin est absolu, on ignore le current.
     if path.starts_with('/') {
         for part in path.split('/') {
             push_component(&mut components, part);
         }
     } else {
-        // On part du current (qui est supposé absolu).
         for part in current.split('/') {
             push_component(&mut components, part);
         }
@@ -147,7 +144,6 @@ fn resolve_path(current: &str, path: &str) -> String {
     }
 }
 
-/// Gère les composants de chemin ("" / "." / ".." / nom normal).
 fn push_component(components: &mut Vec<&str>, part: &str) {
     match part {
         "" | "." => {}
@@ -158,7 +154,6 @@ fn push_component(components: &mut Vec<&str>, part: &str) {
     }
 }
 
-/// Exécute une commande "ls" sur un chemin **absolu** donné.
 fn run_ls(fs: &Fat32, path: &str) {
     match fs.list_dir_path(path) {
         Ok(entries) => {
@@ -174,11 +169,9 @@ fn run_ls(fs: &Fat32, path: &str) {
     }
 }
 
-/// Exécute une commande "cat" sur un chemin **absolu** donné.
 fn run_cat(fs: &Fat32, path: &str) {
     match fs.read_file_by_path(path) {
         Ok(Some(bytes)) => {
-            // Affichage brut
             print!("{}", String::from_utf8_lossy(&bytes));
         }
         Ok(None) => {
@@ -190,9 +183,6 @@ fn run_cat(fs: &Fat32, path: &str) {
     }
 }
 
-/// Lance un mini-shell sur le volume FAT32.
-///
-/// On gère :"ls", "cat", "cd", "pwd", "help", "exit"
 fn run_shell(fs: &Fat32) {
     println!("FAT32 shell interactif. Tapez 'help' pour l'aide, 'exit' pour quitter.");
 
@@ -212,7 +202,6 @@ fn run_shell(fs: &Fat32) {
         };
 
         if n == 0 {
-            // EOF
             break;
         }
 
@@ -273,7 +262,9 @@ fn run_shell(fs: &Fat32) {
                 }
             }
             _ => {
-                println!("Commande inconnue : {cmd}. Tapez 'help' pour la liste des commandes");
+                println!(
+                    "Commande inconnue : {cmd}. Tapez 'help' pour la liste des commandes."
+                );
             }
         }
     }

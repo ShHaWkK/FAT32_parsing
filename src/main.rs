@@ -14,19 +14,19 @@ Exemples :
   fat32_cli --file disk.img --ls DIR
   fat32_cli --file disk.img --cat HELLO.TXT
 
-Sans --ls / --cat, un shell  est lancé :
-  ls [chemin]       - liste un répertoire (absolu ou relatif)
-  cat <chemin>      - affiche un fichier
-  cd [chemin]       - change de répertoire courant
-  pwd               - affiche le répertoire courant
-  help              - affiche l'aide
-  exit              - quitte"
+Sans --ls / --cat :
+  ls chemin       - liste un répertoire (absolu ou relatif)
+  cat chemin      - affiche un fichier
+  cd chemin       - change de répertoire courant
+  pwd   - affiche le répertoire courant
+  help
+  exit"
     );
 }
 
 fn print_shell_help() {
     println!(
-        "Commandes :
+"Commandes :
   ls [chemin]       - lister un répertoire
   cat <chemin>      - lire un fichier
   cd [chemin]       - changer de répertoire courant

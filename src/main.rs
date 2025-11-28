@@ -14,7 +14,7 @@ Exemples :
   fat32_cli --file disk.img --ls DIR
   fat32_cli --file disk.img --cat HELLO.TXT
 
-Sans --ls / --cat, un shell interactif est lancé :
+Sans --ls / --cat, un shell  est lancé :
   ls [chemin]       - liste un répertoire (absolu ou relatif)
   cat <chemin>      - affiche un fichier
   cd [chemin]       - change de répertoire courant
@@ -26,7 +26,7 @@ Sans --ls / --cat, un shell interactif est lancé :
 
 fn print_shell_help() {
     println!(
-"Commandes :
+        "Commandes :
   ls [chemin]       - lister un répertoire
   cat <chemin>      - lire un fichier
   cd [chemin]       - changer de répertoire courant
@@ -119,8 +119,14 @@ fn main() {
 }
 
 /// Résout un chemin absolu ou relatif à partir d'un répertoire courant.
+///
+/// Exemples :
+/// - current="/DIR", path=".."          -> "/"
+/// - current="/DIR", path="FILE.TXT"    -> "/DIR/FILE.TXT"
+/// - current="/",     path="/AUTRE/XX"  -> "/AUTRE/XX"
 fn resolve_path(current: &str, path: &str) -> String {
-    let mut components = Vec::new();
+    // On stocke des String pour éviter les problèmes connu de lifetimes
+    let mut components: Vec<String> = Vec::new();
 
     if path.starts_with('/') {
         for part in path.split('/') {
@@ -144,13 +150,16 @@ fn resolve_path(current: &str, path: &str) -> String {
     }
 }
 
-fn push_component(components: &mut Vec<&str>, part: &str) {
+/// Ajoute un composant de chemin dans la liste (gère ".", ".." et vide).
+fn push_component(components: &mut Vec<String>, part: &str) {
     match part {
         "" | "." => {}
         ".." => {
             components.pop();
         }
-        _ => components.push(part),
+        _ => {
+            components.push(part.to_string());
+        }
     }
 }
 
@@ -184,7 +193,7 @@ fn run_cat(fs: &Fat32, path: &str) {
 }
 
 fn run_shell(fs: &Fat32) {
-    println!("FAT32 shell interactif. Tapez 'help' pour l'aide, 'exit' pour quitter.");
+    println!("FAT32 shell. Tapez 'help' pour l'aide, 'exit' pour quitter.");
 
     let stdin = io::stdin();
     let mut current_dir = String::from("/");

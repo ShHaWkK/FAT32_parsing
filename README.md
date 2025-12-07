@@ -56,3 +56,85 @@ Pour les essais “réels”, j’utilise une image `disk.img` créée avec `mkf
 Le binaire `fat32_cli` lit ensuite ce fichier et permet de tester `ls`, `cd`, `cat` et `pwd` sur un vrai volume FAT32.
 
 ---
+
+
+Commmandes : 
+
+### Créer un fichier 
+
+fallocate -l 64M disk.img
+ou 
+dd if=/dev/zero of=disk.img bs=1M count=64
+
+### Formater l'image en FAT32 :
+
+```
+sudo apt update
+sudo apt install dosfstools
+```
+
+Puis : 
+
+```
+mkfs.vfat -F 32 disk.img
+```
+
+### Monter l'image comme un vrai disque : 
+
+```
+sudo mkdir -p /mnt/fat32_test
+sudo mount -o loop disk.img /mnt/fat32_test
+```
+
+### Créer quelques fichiers / répertoires pour tester
+
+
+```
+# fichier à la racine
+echo "Hello FAT32" | sudo tee /mnt/fat32_test/HELLO.TXT
+
+# un dossier
+sudo mkdir -p /mnt/fat32_test/DIR
+
+# un fichier dans DIR
+echo "Inside DIR" | sudo tee /mnt/fat32_test/DIR/NOTE.TXT
+```
+
+On peux vérifier : 
+
+```
+ls -l /mnt/fat32_test
+ls -l /mnt/fat32_test/DIR
+```
+
+!!!! Très important avant d'utiliser le bianire : 
+
+```
+sudo umount /mnt/fat32_test
+```
+
+À partir de là, le fichier disk.img dans le projet contient un vrai volume FAT32 valide.
+
+
+
+Tester le binaire : 
+
+```
+cargo build --release
+```
+
+# mode "one shot"
+./target/release/fat32_cli --file disk.img --ls /
+./target/release/fat32_cli --file disk.img --ls DIR
+./target/release/fat32_cli --file disk.img --cat /HELLO.TXT
+./target/release/fat32_cli --file disk.img --cat DIR/NOTE.TXT
+
+# mode shell 
+./target/release/fat32_cli --file disk.img
+fat32:/> ls
+fat32:/> cd DIR
+fat32:/DIR> ls
+fat32:/DIR> cat NOTE.TXT
+fat32:/DIR> pwd
+fat32:/DIR> exit
+

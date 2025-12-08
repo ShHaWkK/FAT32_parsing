@@ -1,10 +1,10 @@
-//! Entrées de répertoire FAT32 
+//! Entrées de répertoire FAT32.
 
 extern crate alloc;
 
 use alloc::string::String;
 
-/// Attributs FAT d'une entrée de répertoire.
+/// Attributs FAT d’une entrée de répertoire.
 #[derive(Debug, Clone, Copy)]
 pub struct Attributes {
     pub read_only: bool,
@@ -29,7 +29,7 @@ impl Attributes {
     }
 }
 
-/// Entrée de répertoire FAT32 avec nom court
+/// Entrée de répertoire FAT32 avec nom court 8.3.
 #[derive(Debug, Clone)]
 pub struct DirEntry {
     pub name: String,
@@ -45,6 +45,7 @@ impl DirEntry {
             return None;
         }
 
+        // entrée libre ou supprimée
         if entry[0] == 0x00 || entry[0] == 0xE5 {
             return None;
         }
@@ -61,8 +62,7 @@ impl DirEntry {
         let ext = decode_ascii_trim(ext_raw);
 
         let full_name = if !ext.is_empty() {
-            let mut s =
-                String::with_capacity(name.len() + 1 + ext.len());
+            let mut s = String::with_capacity(name.len() + 1 + ext.len());
             s.push_str(&name);
             s.push('.');
             s.push_str(&ext);
@@ -71,18 +71,11 @@ impl DirEntry {
             name
         };
 
-        let first_cluster_high =
-            u16::from_le_bytes([entry[20], entry[21]]) as u32;
-        let first_cluster_low =
-            u16::from_le_bytes([entry[26], entry[27]]) as u32;
+        let first_cluster_high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+        let first_cluster_low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
         let first_cluster = (first_cluster_high << 16) | first_cluster_low;
 
-        let size = u32::from_le_bytes([
-            entry[28],
-            entry[29],
-            entry[30],
-            entry[31],
-        ]);
+        let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]);
 
         Some(Self {
             name: full_name,
@@ -92,12 +85,12 @@ impl DirEntry {
         })
     }
 
-    /// Indique si l'entrée est un répertoire.
+    /// Indique si l’entrée est un répertoire.
     pub fn is_dir(&self) -> bool {
         self.attrs.directory
     }
 
-    /// Indique si l'entrée est un fichier.
+    /// Indique si l’entrée est un fichier.
     pub fn is_file(&self) -> bool {
         !self.attrs.directory
     }

@@ -1,14 +1,9 @@
-//! Parseur FAT32 
+//! Parseur FAT32
 //!
-//! Cette bibliothèque travaille uniquement en lecture :
-//! - inspection de l'en-tête FAT32 (BPB),
-//! - parcours de la FAT et des clusters,
-//! - listage des répertoires,
-//! - lecture de fichiers à partir de chemins absolus
+//! Lecture seule d’un volume FAT32 à partir d’un buffer mémoire.
+//! La lib expose de quoi lister des répertoires et lire des fichiers.
 //!
-//! Elle est "no_std" (hors tests) et ne dépend que de "core" et "alloc"
-
-
+//! Le cœur est en `no_std` (hors tests) et dépend uniquement de core et alloc.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -20,28 +15,29 @@ mod dir_entry;
 
 pub use dir_entry::{Attributes, DirEntry};
 
-/// Erreurs possibles lors de la lecture du système de fichiers FAT32
+/// Erreurs possibles lors de l’accès à un volume FAT32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatError {
-    /// Le buffer ne contient pas assez de données pour un volume valide
+    /// Le buffer ne contient pas assez de données pour un volume valide.
     BufferTooSmall,
-    /// Les champs de l'en-tête ne correspondent pas à un volume FAT32
+    /// Les champs de l'en-tête ne correspondent pas à un volume FAT32 attendu.
     NotFat32,
-    /// Tentative de lecture en dehors du buffer 
+    /// Tentative de lecture en dehors du buffer.
     OutOfBounds,
-    /// Numéro de cluster invalide (par exemple < 2).
+    /// Numéro de cluster invalide (ex: < 2).
     InvalidCluster,
     /// On tente de lire un répertoire comme un fichier.
     NotAFile,
-    /// On tente de lister un fichier comme un répertoire
+    /// On tente de lister un fichier comme un répertoire.
     NotADirectory,
-    /// Le chemin ne correspond à aucune entrée connue
+    /// Le chemin ne correspond à aucune entrée connue.
     PathNotFound,
-    /// Cas pour les erreurs
+    /// Erreur générique.
     Other,
 }
 
-/// Vue en lecture seule d'un volume FAT32 stocké dans un buffer mémoire
+/// Vue en lecture seule d’un volume FAT32 stocké dans un buffer mémoire.
+#[derive(Debug)]
 pub struct Fat32<'a> {
     disk: &'a [u8],
     bytes_per_sector: u16,
@@ -54,6 +50,9 @@ pub struct Fat32<'a> {
 
 impl<'a> Fat32<'a> {
     /// Construit une vue FAT32 depuis un dump en mémoire.
+    ///
+    /// Cette fonction lit un BPB minimal, récupère les paramètres
+    /// nécessaires au calcul des offsets et valide quelques invariants simples.
     pub fn new(disk: &'a [u8]) -> Result<Self, FatError> {
         if disk.len() < 512 {
             return Err(FatError::BufferTooSmall);
@@ -67,18 +66,20 @@ impl<'a> Fat32<'a> {
         let num_fats = b[16];
 
         let total_sectors_16 = u16::from_le_bytes([b[19], b[20]]);
-        let total_sectors_32 =
-            u32::from_le_bytes([b[32], b[33], b[34], b[35]]);
+        let total_sectors_32 = u32::from_le_bytes([b[32], b[33], b[34], b[35]]);
         let _total_sectors = if total_sectors_16 != 0 {
             total_sectors_16 as u32
         } else {
             total_sectors_32
         };
 
-        let sectors_per_fat =
-            u32::from_le_bytes([b[36], b[37], b[38], b[39]]);
-        let root_cluster =
-            u32::from_le_bytes([b[44], b[45], b[46], b[47]]);
+        let sectors_per_fat = u32::from_le_bytes([b[36], b[37], b[38], b[39]]);
+        let root_cluster = u32::from_le_bytes([b[44], b[45], b[46], b[47]]);
+
+        // Checks minimalistes pour éviter un état incohérent.
+        if bytes_per_sector == 0 || sectors_per_cluster == 0 || num_fats == 0 {
+            return Err(FatError::NotFat32);
+        }
 
         if sectors_per_fat == 0 {
             return Err(FatError::NotFat32);
@@ -95,20 +96,18 @@ impl<'a> Fat32<'a> {
         })
     }
 
-    /// Liste le contenu du répertoire racine
+    /// Liste le contenu du répertoire racine.
     pub fn list_root(&self) -> Result<Vec<DirEntry>, FatError> {
         self.list_dir_cluster(self.root_cluster)
     }
 
-    /// Liste un répertoire à partir d'un chemin absolu (ex: "/DIR")
+    /// Liste un répertoire à partir d’un chemin absolu.
     pub fn list_dir_path(&self, path: &str) -> Result<Vec<DirEntry>, FatError> {
         if path == "/" {
             return self.list_root();
         }
 
-        let entry = self
-            .open_path(path)?
-            .ok_or(FatError::PathNotFound)?;
+        let entry = self.open_path(path)?.ok_or(FatError::PathNotFound)?;
 
         if !entry.is_dir() {
             return Err(FatError::NotADirectory);
@@ -117,11 +116,8 @@ impl<'a> Fat32<'a> {
         self.list_dir_cluster(entry.first_cluster)
     }
 
-    /// Lit un fichier à partir de son chemin absolu
-    pub fn read_file_by_path(
-        &self,
-        path: &str,
-    ) -> Result<Option<Vec<u8>>, FatError> {
+    /// Lit un fichier à partir de son chemin absolu.
+    pub fn read_file_by_path(&self, path: &str) -> Result<Option<Vec<u8>>, FatError> {
         let entry = match self.open_path(path)? {
             Some(e) => e,
             None => return Ok(None),
@@ -131,11 +127,10 @@ impl<'a> Fat32<'a> {
             return Err(FatError::NotAFile);
         }
 
-        let content = self.read_file(&entry)?;
-        Ok(Some(content))
+        Ok(Some(self.read_file(&entry)?))
     }
 
-    /// Résout un chemin absolu en entrée de répertoire (sans lire son contenu)
+    /// Résout un chemin absolu en entrée de répertoire.
     pub fn open_path(&self, path: &str) -> Result<Option<DirEntry>, FatError> {
         if !path.starts_with('/') {
             return Err(FatError::Other);
@@ -168,7 +163,7 @@ impl<'a> Fat32<'a> {
         Ok(last_entry)
     }
 
-    /// Lit un fichier à partir de l'entrée de répertoire associée
+    /// Lit un fichier à partir d’une entrée de répertoire.
     pub fn read_file(&self, entry: &DirEntry) -> Result<Vec<u8>, FatError> {
         if !entry.is_file() {
             return Err(FatError::NotAFile);
@@ -178,12 +173,15 @@ impl<'a> Fat32<'a> {
         let mut data = Vec::new();
         let mut remaining = entry.size as usize;
 
+        // Limite pour éviter les boucles infinies sur une FAT corrompue.
         let chain = self.follow_chain(entry.first_cluster, 4096)?;
 
         for cl in chain {
             let cluster = self.read_cluster(cl)?;
             let to_take = core::cmp::min(remaining, cluster_size);
+
             data.extend_from_slice(&cluster[..to_take]);
+
             remaining -= to_take;
             if remaining == 0 {
                 break;
@@ -209,8 +207,7 @@ impl<'a> Fat32<'a> {
 
     fn data_start_byte(&self) -> usize {
         self.fat_start_byte()
-            + (self.num_fats as usize * self.sectors_per_fat as usize)
-                * self.bytes_per_sector()
+            + (self.num_fats as usize * self.sectors_per_fat as usize) * self.bytes_per_sector()
     }
 
     fn cluster_to_offset(&self, cluster: u32) -> Result<usize, FatError> {
@@ -249,14 +246,11 @@ impl<'a> Fat32<'a> {
 
         let bytes = &self.disk[entry_offset..entry_offset + 4];
         let val = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
         Ok(val & 0x0FFF_FFFF)
     }
 
-    fn follow_chain(
-        &self,
-        start_cluster: u32,
-        max_clusters: usize,
-    ) -> Result<Vec<u32>, FatError> {
+    fn follow_chain(&self, start_cluster: u32, max_clusters: usize) -> Result<Vec<u32>, FatError> {
         let mut result = Vec::new();
         let mut current = start_cluster;
 
@@ -278,11 +272,7 @@ impl<'a> Fat32<'a> {
         Ok(result)
     }
 
-    fn list_dir_cluster(
-        &self,
-        start_cluster: u32,
-    ) -> Result<Vec<DirEntry>, FatError> {
-        let cluster_size = self.cluster_size();
+    fn list_dir_cluster(&self, start_cluster: u32) -> Result<Vec<DirEntry>, FatError> {
         let mut entries = Vec::new();
 
         let chain = self.follow_chain(start_cluster, 4096)?;
@@ -290,7 +280,7 @@ impl<'a> Fat32<'a> {
         for cl in chain {
             let data = self.read_cluster(cl)?;
 
-            for chunk in data[..cluster_size].chunks(32) {
+            for chunk in data.chunks(32) {
                 if let Some(entry) = DirEntry::parse(chunk) {
                     entries.push(entry);
                 }
@@ -408,6 +398,13 @@ mod tests {
     }
 
     #[test]
+    fn new_on_too_small_buffer_fails() {
+        let tiny = [0u8; 128];
+        let err = Fat32::new(&tiny).unwrap_err();
+        assert_eq!(err, FatError::BufferTooSmall);
+    }
+
+    #[test]
     fn parse_header_ok() {
         let disk = build_test_image();
         let fs = Fat32::new(&disk).expect("fat32 new failed");
@@ -491,5 +488,14 @@ mod tests {
 
         let res = fs.read_file(&dir_entry);
         assert!(matches!(res, Err(FatError::NotAFile)));
+    }
+
+    #[test]
+    fn list_dir_on_file_returns_not_a_directory() {
+        let disk = build_test_image();
+        let fs = Fat32::new(&disk).expect("fat32 new failed");
+
+        let err = fs.list_dir_path("/HELLO.TXT").unwrap_err();
+        assert_eq!(err, FatError::NotADirectory);
     }
 }

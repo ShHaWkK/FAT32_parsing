@@ -3,7 +3,7 @@
 //! Lecture seule d’un volume FAT32 à partir d’un buffer mémoire.
 //! La lib expose de quoi lister des répertoires et lire des fichiers.
 //!
-//! Le cœur est en `no_std` (hors tests) et dépend uniquement de core et alloc.
+//! Le cœur est en no_std (hors tests) et dépend uniquement de core et alloc.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -304,16 +304,17 @@ mod tests {
     use super::*;
 
     /// Mini volume FAT32 en mémoire :
-    /// - secteur 0 : BPB simplifié,
-    /// - secteur 1 : FAT,
-    /// - secteur 2 : racine avec HELLO.TXT,
-    /// - secteur 3 : contenu "HELLO".
-    fn build_test_image() -> [u8; 2048] {
+    ///  BPB simplifié,
+    ///  FAT,
+    ///  racine avec HELLO.TXT et DIR,
+    ///  contenu "HELLO",
+    ///  cluster du répertoire DIR 
+    fn build_test_image() -> [u8; 2560] {
         const SECTOR_SIZE: usize = 512;
-        const NUM_SECTORS: usize = 4;
+        const NUM_SECTORS: usize = 5;
         let mut disk = [0u8; SECTOR_SIZE * NUM_SECTORS];
 
-        // secteur 0 : BPB
+        // BPB
         {
             let b = &mut disk[0..SECTOR_SIZE];
 
@@ -340,7 +341,7 @@ mod tests {
             b[47] = 0x00;
         }
 
-        // secteur 1 : FAT
+        // FAT
         {
             let fat_start = SECTOR_SIZE;
             let fat = &mut disk[fat_start..fat_start + SECTOR_SIZE];
@@ -348,50 +349,90 @@ mod tests {
             let eoc: u32 = 0x0FFF_FFFF;
             let eoc_bytes = eoc.to_le_bytes();
 
-            // cluster 2 (racine) -> EOC
+            // cluster 2 (racine) 
             let c2_offset = 2 * 4;
             fat[c2_offset..c2_offset + 4].copy_from_slice(&eoc_bytes);
 
-            // cluster 3 (fichier HELLO.TXT) -> EOC
+            // cluster 3 (fichier HELLO.TXT) 
             let c3_offset = 3 * 4;
             fat[c3_offset..c3_offset + 4].copy_from_slice(&eoc_bytes);
+
+            // cluster 4 (répertoire DIR) 
+            let c4_offset = 4 * 4;
+            fat[c4_offset..c4_offset + 4].copy_from_slice(&eoc_bytes);
         }
 
-        // secteur 2 : racine (cluster 2)
+        // racine (cluster 2)
         {
             let root_cluster_sector = 2;
             let root_off = root_cluster_sector * SECTOR_SIZE;
             let dir = &mut disk[root_off..root_off + SECTOR_SIZE];
 
-            let mut entry = [0u8; 32];
+            // --- entrée 1 : HELLO.TXT ---
+            let mut hello = [0u8; 32];
 
-            entry[0..8].copy_from_slice(b"HELLO   ");
-            entry[8..11].copy_from_slice(b"TXT");
+            hello[0..8].copy_from_slice(b"HELLO   ");
+            hello[8..11].copy_from_slice(b"TXT");
 
-            entry[11] = 0x20; // archive
+            hello[11] = 0x20; // archive (fichier)
 
-            entry[20] = 0x00; // high
-            entry[21] = 0x00;
+            // first_cluster = 3
+            hello[20] = 0x00; // high
+            hello[21] = 0x00;
+            hello[26] = 0x03; // low
+            hello[27] = 0x00;
 
-            entry[26] = 0x03; // low = 3
-            entry[27] = 0x00;
+            // size = 5 ("HELLO")
+            hello[28] = 5;
+            hello[29] = 0;
+            hello[30] = 0;
+            hello[31] = 0;
 
-            entry[28] = 5; // size = 5 ("HELLO")
-            entry[29] = 0;
-            entry[30] = 0;
-            entry[31] = 0;
+            dir[0..32].copy_from_slice(&hello);
 
-            dir[0..32].copy_from_slice(&entry);
-            dir[32] = 0x00; // fin de répertoire
+            // --- entrée 2 : DIR (répertoire) ---
+            let mut subdir = [0u8; 32];
+
+            subdir[0..8].copy_from_slice(b"DIR     ");
+            subdir[8..11].copy_from_slice(b"   ");
+
+            subdir[11] = 0x10; // directory
+
+            // first_cluster = 4
+            subdir[20] = 0x00; // high
+            subdir[21] = 0x00;
+            subdir[26] = 0x04; // low
+            subdir[27] = 0x00;
+
+            // size = 0
+            subdir[28] = 0;
+            subdir[29] = 0;
+            subdir[30] = 0;
+            subdir[31] = 0;
+
+            dir[32..64].copy_from_slice(&subdir);
+
+            // fin de répertoire
+            dir[64] = 0x00;
         }
 
-        // secteur 3 : contenu du fichier (cluster 3)
+        // Contenu du fichier (cluster 3)
         {
             let file_cluster_sector = 3;
             let file_off = file_cluster_sector * SECTOR_SIZE;
             let data = &mut disk[file_off..file_off + SECTOR_SIZE];
 
             data[0..5].copy_from_slice(b"HELLO");
+        }
+
+        // Contenu du répertoire DIR (cluster 4)
+        {
+            let dir_cluster_sector = 4;
+            let dir_off = dir_cluster_sector * SECTOR_SIZE;
+            let data = &mut disk[dir_off..dir_off + SECTOR_SIZE];
+
+            // répertoire vide -> première entrée = 0x00
+            data[0] = 0x00;
         }
 
         disk
@@ -423,9 +464,15 @@ mod tests {
         let fs = Fat32::new(&disk).expect("fat32 new failed");
 
         let root = fs.list_root().expect("list_root failed");
-        assert_eq!(root.len(), 1);
-        assert_eq!(root[0].name, "HELLO.TXT");
-        assert_eq!(root[0].size, 5);
+        assert_eq!(root.len(), 2);
+
+        let hello = root.iter().find(|e| e.name == "HELLO.TXT").expect("HELLO.TXT missing");
+        let dir = root.iter().find(|e| e.name == "DIR").expect("DIR missing");
+
+        assert!(hello.is_file());
+        assert!(dir.is_dir());
+
+        assert_eq!(hello.size, 5);
 
         let content = fs
             .read_file_by_path("/HELLO.TXT")
@@ -466,36 +513,35 @@ mod tests {
     }
 
     #[test]
-    fn read_file_on_directory_returns_not_a_file() {
-        let disk = build_test_image();
-        let fs = Fat32::new(&disk).expect("fat32 new failed");
-
-        let attrs = Attributes {
-            read_only: false,
-            hidden: false,
-            system: false,
-            volume_id: false,
-            directory: true,
-            archive: false,
-        };
-
-        let dir_entry = DirEntry {
-            name: "ROOT".into(),
-            attrs,
-            first_cluster: fs.root_cluster,
-            size: 0,
-        };
-
-        let res = fs.read_file(&dir_entry);
-        assert!(matches!(res, Err(FatError::NotAFile)));
-    }
-
-    #[test]
     fn list_dir_on_file_returns_not_a_directory() {
         let disk = build_test_image();
         let fs = Fat32::new(&disk).expect("fat32 new failed");
 
         let err = fs.list_dir_path("/HELLO.TXT").unwrap_err();
         assert_eq!(err, FatError::NotADirectory);
+    }
+
+    #[test]
+    fn read_file_on_directory_via_open_path_returns_not_a_file() {
+        let disk = build_test_image();
+        let fs = Fat32::new(&disk).expect("fat32 new failed");
+
+        let entry = fs.open_path("/DIR").expect("open_path failed").expect("DIR not found");
+        assert!(entry.is_dir());
+
+        let err = fs.read_file(&entry).unwrap_err();
+        assert_eq!(err, FatError::NotAFile);
+    }
+
+    #[test]
+    fn open_path_is_case_insensitive_for_short_names() {
+        let disk = build_test_image();
+        let fs = Fat32::new(&disk).expect("fat32 new failed");
+
+        let entry = fs.open_path("/hello.txt").expect("open_path failed");
+        let entry = entry.expect("hello.txt should resolve to HELLO.TXT");
+
+        assert_eq!(entry.name, "HELLO.TXT");
+        assert!(entry.is_file());
     }
 }

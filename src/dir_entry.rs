@@ -1,17 +1,28 @@
-//! Entrées de répertoire FAT32.
+//! Entrées de répertoire FAT32 (format court 8.3).
+//!
+//! Dans ce projet on ne gère pas les Long File Names (LFN).
+//! On parse donc uniquement les entrées “courtes” de 32 octets.
 
 extern crate alloc;
 
 use alloc::string::String;
 
 /// Attributs FAT d’une entrée de répertoire.
+///
+/// Les bits viennent directement du champ `ATTR` (offset 11).
 #[derive(Debug, Clone, Copy)]
 pub struct Attributes {
+    /// Fichier en lecture seule.
     pub read_only: bool,
+    /// Fichier caché.
     pub hidden: bool,
+    /// Fichier système.
     pub system: bool,
+    /// Volume ID (étiquette de volume).
     pub volume_id: bool,
+    /// Répertoire.
     pub directory: bool,
+    /// Archive (fichier classique).
     pub archive: bool,
 }
 
@@ -29,17 +40,27 @@ impl Attributes {
     }
 }
 
-/// Entrée de répertoire FAT32 avec nom court 8.3.
+/// Entrée de répertoire FAT32 (nom court 8.3).
+///
+/// Exemple: `HELLO.TXT`, `DIR`, `A.BIN`.
 #[derive(Debug, Clone)]
 pub struct DirEntry {
+    /// Nom court reconstitué (ex: `HELLO.TXT`).
     pub name: String,
+    /// Attributs FAT.
     pub attrs: Attributes,
+    /// Premier cluster de la chaîne (0 si fichier vide dans notre écriture simple).
     pub first_cluster: u32,
+    /// Taille du fichier en octets (0 pour un répertoire).
     pub size: u32,
 }
 
 impl DirEntry {
     /// Parse une entrée de 32 octets.
+    ///
+    /// Retourne `None` si:
+    /// - l’entrée est libre (`0x00`) ou supprimée (`0xE5`)
+    /// - l’entrée est un Volume ID
     pub fn parse(entry: &[u8]) -> Option<Self> {
         if entry.len() < 32 {
             return None;
@@ -96,7 +117,7 @@ impl DirEntry {
     }
 }
 
-/// Décodage ASCII simple avec suppression des espaces de fin.
+/// Décodage ASCII simple en supprimant les espaces de fin (padding FAT 8.3).
 fn decode_ascii_trim(bytes: &[u8]) -> String {
     let mut end = bytes.len();
     while end > 0 && bytes[end - 1] == b' ' {

@@ -1,186 +1,172 @@
 # FAT32_parsing
 
-Ce projet est une réimplémentation FAT32 en lecture seule en Rust. L’objectif est de parser un volume FAT32 à partir d’un dump brut (par exemple disk.img), de lister des fichiers depuis un chemin donné, de lire le contenu d’un fichier depuis un chemin donné, et de proposer une manière simple de représenter où l’on se situe dans l’arborescence, à la manière d’un cd et d’un pwd.
+Dans ce projet, j’ai réimplémenté une partie de FAT32 en Rust à partir d’une image disque brute comme `disk.img`. L’idée de départ était simple : je voulais pouvoir charger le disque en mémoire, comprendre sa structure “à la main”, puis reconstruire l’accès aux fichiers comme un vrai système de fichiers le ferait. Au final, je peux naviguer dans l’arborescence, lister des répertoires, lire des fichiers, et aussi écrire un fichier dans l’image de façon persistante (donc le contenu reste dans `disk.img` après le programme).
 
---- 
-
-## Démarche
-
-Avant de coder, je suis parti relire des ressources comme **phil-opp (Writing an OS in Rust)** pour me remettre dans le contexte `no_std`, voir comment séparer une bibliothèque bas niveau d’un binaire, et comment utiliser `alloc` proprement sans la lib standard.
-
-Ensuite, je me suis documenté sur FAT32 lui-même, en me concentrant surtout sur la partie utile au sujet. J’ai relu la structure du BPB (notamment la taille des secteurs, la taille des clusters, le nombre de FAT, la taille d’une FAT et le cluster racine), le principe d’enchaînement des clusters via la FAT, et le format des entrées de répertoire en 32 octets avec noms courts en 8.3. L’idée était de viser une implémentation lisible et robuste pour la lecture, plutôt que de vouloir couvrir tous les cas avancés du standard.
-
-À partir de là, j’ai choisi une architecture assez classique : une lib `no_std + alloc` qui connaît FAT32 et ne manipule que des slices en mémoire, et un binaire `std` très fin qui lit le fichier `disk.img`, instancie la lib et offre une petite CLI pour jouer avec le système de fichiers.
+Je me suis volontairement limité à une version claire et contrôlée. Je gère les noms courts FAT (format 8.3), parce que ça permet déjà de faire une implémentation complète et solide sans tomber dans toute la complexité des Long File Names. L’objectif était d’avoir quelque chose de propre et démontrable, pas de couvrir tout le standard.
 
 ---
 
-## Architecture et choix techniques
+## Comment j’ai travaillé
 
-J’ai séparé le projet en deux parties complémentaires
+Avant d’attaquer FAT32, je me suis remis dans le contexte “bas niveau”. Comme je voulais un code utilisable dans un contexte `no_std`, j’ai pris le temps de revoir comment organiser un projet Rust avec une bibliothèque qui n’a pas besoin de `std`, et un petit binaire séparé qui s’occupe seulement de l’I/O et de l’affichage. Ça m’a aussi permis d’utiliser `alloc` correctement, parce que même en `no_std`, on a besoin de `Vec` et de `String` dès qu’on reconstruit des chemins et du contenu de fichier.
 
-
-
-La bibliothèque `fat32_parser` contient toute la logique FAT32.
-Elle est en `no_std` (hors tests) et utilise uniquement core et alloc. Elle travaille sur un &[u8] représentant le volume complet en mémoire. Ce choix permet de tester facilement la logique avec une image synthétique en RAM et rend la lib réutilisable dans un contexte proche OS ou embarqué.
-
-
-Grossièrement elle expose une structure `Fat32<'a>` qui prend un `&[u8]` représentant le volume complet, et des fonctions pour lister des répertoires et lire des fichiers.
-
- 
-Le binaire fat32_cli est volontairement fin. Il utilise std seulement pour lire `disk.img`, gérer l’entrée/sortie et offrir une petite interface interactive. 
-
-Cette CLI n’est pas obligatoire dans la consigne, mais je l’ai ajoutée pour une raison simple. Elle me permet de prouver visuellement que la bibliothèque fonctionne aussi sur une image FAT32 réelle et pas seulement sur un mini volume de test. Cela reste une démonstration optionnelle, sans jamais polluer le cœur `no_std`.
----
-
-## Fonctions principales
-
-La bibliothèque permet de lister un répertoire et de lire un fichier à partir d’un chemin absolu. La résolution de chemin repose sur une lecture des répertoires à partir du cluster racine, en comparant les noms qui sont normalisées en majuscules pour coller au comportement classique des noms courts FAT.
-
-
-Dans la CLI, j’ai ajouté la gestion des chemins relatifs, `.` et `..`, afin de rendre les commandes proches d’un usage réel. La fonction resolve_path recompose un chemin absolu à partir du répertoire courant. Cela évite d’augmenter inutilement la complexité côté bibliothèque et maintient un découplage propre entre logique FAT32 et ergonomie utilisateur.
-
-Explication des fonctions principales
-
-`Fat32::new` construit une vue cohérente du volume à partir du buffer brut. Elle lit un BPB minimal et récupère les paramètres nécessaires au calcul des offsets. J’ai ajouté des vérifications simples pour éviter qu’un volume incohérent ou incomplet soit traité comme un FAT32 valide.
-
-`Fat32::list_root` et `Fat32::list_dir_path` gèrent le listage des entrées d’un répertoire. La logique suit la chaîne de clusters du répertoire au travers de la FAT, puis parcourt les structures de 32 octets. Les entrées libres, supprimées ou de type volume label sont ignorées. Les noms sont reconstruits au format 8.3.
-
-`Fat32::open_path` résout un chemin absolu sans lire le contenu d’un fichier. La fonction avance segment par segment dans l’arborescence, en listant le répertoire courant et en cherchant l’entrée correspondant au segment suivant. Ce découpage m’a permis d’avoir une seule fonction de résolution de chemin réutilisée par le listage et la lecture de fichier.
-
-`Fat32::read_file_by_path` est un point d’entrée pratique. Elle résout le chemin puis vérifie qu’on pointe bien vers un fichier, avant d’appeler la logique de lecture.
-
-`Fat32::read_file` reconstruit le contenu d’un fichier en suivant la chaîne de clusters. J’ai fixé une limite de parcours pour éviter une boucle infinie en cas de FAT corrompue. Le nombre d’octets réellement copiés est borné par la taille annoncée dans l’entrée de répertoire.
-
-
-## Tests et dump
-
-La consigne demande des tests obligatoires via `cargo test`. 
-
-J’ai donc construit une suite d’unit tests basée sur un volume FAT32 synthétique en mémoire. 
-
-Cette image contient un BPB minime, une FAT simple, un répertoire racine et un fichier HELLO.TXT. 
-
-Cela me permet de valider la lecture de l’en-tête, le listage de la racine, la lecture d’un fichier, et plusieurs cas d’erreurs utiles.
-
-J’ai aussi ajouté un test symétrique propre pour vérifier un comportement typique attendu par un utilisateur. Lister un chemin correspondant à un fichier doit déclencher `NotADirectory`, ce qui prouve que la lib ne mélange pas les types d’entrées.
-
-Pour aller un cran plus loin, j’ai ajouté un test d’intégration optionnel dans `tests/disk_img.rs`. Son but est de vérifier que la bibliothèque fonctionne sur une vraie image FAT32 générée par un outil standard. Le test est volontairement tolérant. S’il ne trouve pas tests/disk.img, il n’échoue pas. Cela évite de forcer un fichier binaire dans le dépôt tout en laissant la possibilité d’une validation plus réaliste.
+Ensuite je me suis concentré sur les trois blocs essentiels de FAT32 : le BPB (le header du volume), la FAT (la table qui chaîne les clusters) et les entrées de répertoire (les structures de 32 octets). À partir de ça, tout devient une histoire d’offsets, de tailles, et de lecture de bytes.
 
 ---
 
-Commandes de test
+## Ce que ça veut dire “parser FAT32 en bytes”
 
-Les tests attendus par la consigne se lancent simplement avec :
+Tout mon projet repose sur une idée très concrète : une image disque, c’est juste une suite d’octets. Donc au lieu de “monter” un filesystem avec le système, je lis et j’interprète ces octets moi-même.
 
-```
-cargo test
+Je commence par lire le BPB dans le tout premier secteur (512 octets). Dedans je récupère des informations qui sont indispensables pour tout le reste : la taille d’un secteur, le nombre de secteurs par cluster, le nombre de FAT, la taille d’une FAT, et le cluster racine. Ces valeurs me servent ensuite à calculer où commence la FAT dans l’image, et où commence la zone data.
 
-```
+À partir de là, quand je parle d’un cluster, je peux vraiment calculer son emplacement dans le buffer mémoire. Un cluster, c’est `bytes_per_sector * sectors_per_cluster`. Donc si je connais le “début de la zone data”, je peux faire le calcul et aller lire exactement au bon endroit.
 
-Si je veux voir les messages éventuels imprimés par les tests d’intégration :
+Pour lister un répertoire, je fais la même logique que FAT32 : je lis un cluster, je le découpe en blocs de 32 octets, parce qu’une entrée de répertoire fait 32 octets. Ensuite je reconstruis le nom 8.3, je lis les attributs (fichier ou répertoire), je récupère le premier cluster, et la taille si c’est un fichier. Je m’arrête quand je tombe sur l’entrée `0x00`, parce que dans FAT32 ça signifie “fin du répertoire”.
 
-```
-cargo test -- --nocapture
-```
+Pour lire un fichier, je fais encore quelque chose de très “bas niveau”. Je pars du premier cluster du fichier, puis je suis la chaîne dans la FAT. Une entrée FAT32 fait 4 octets, donc je lis à l’offset `fat_start + cluster*4`. J’enchaîne les clusters jusqu’à une valeur de fin (EOC). Ensuite je recopie les bytes des clusters dans un `Vec<u8>`, et je m’arrête exactement à la taille indiquée par l’entrée de répertoire.
 
-Commmandes : 
+---
 
-### Créer un fichier 
+## Comment j’ai organisé le projet
 
-fallocate -l 64M disk.img
-ou 
+J’ai séparé le projet en deux parties parce que je voulais garder une base propre.
+
+La bibliothèque `fat32_parser` contient la logique FAT32. Elle ne fait aucune entrée/sortie, elle ne dépend pas de `std`, et elle travaille uniquement sur un buffer en mémoire (`&[u8]` pour la lecture et `&mut [u8]` pour l’écriture). Ce choix rend la logique facile à tester et facile à réutiliser.
+
+Le binaire `fat32_cli` est volontairement minimal. Son rôle est juste de lire `disk.img` depuis le disque, d’appeler la bibliothèque, et d’afficher le résultat. Je l’ai ajouté parce que ça me permet de démontrer le projet sur une vraie image FAT32, pas seulement sur un test.
+
+---
+
+## Ce que j’ai ajouté en plus : écriture persistante
+
+Au début je faisais surtout de la lecture, mais j’ai décidé d’aller plus loin et d’implémenter aussi une écriture simple et réelle.
+
+Concrètement, j’ai une structure `Fat32Mut` qui travaille sur `&mut [u8]`. Avec ça, je peux créer un fichier (ou écraser un fichier existant) dans un répertoire déjà présent, et écrire son contenu directement dans l’image. Ensuite, la CLI réécrit `disk.img` sur le disque, donc la modification reste.
+
+Je suis resté sur une écriture volontairement simple. Je supporte uniquement les noms 8.3, je ne crée pas encore de répertoires, et je n’implémente pas les timestamps. Par contre, ce que j’ai fait est “vrai” : j’alloue des clusters en scannant la FAT, je chaîne les clusters dans la FAT, j’écris les bytes dans la zone data, et je mets à jour l’entrée de répertoire. Et si j’écrase un fichier existant, je libère correctement l’ancienne chaîne de clusters.
+
+C’est aussi pour ça que je n’ai pas ajouté `mkdir` dans la lib : créer un répertoire, c’est créer une entrée de répertoire + gérer les entrées `.` et `..` + potentiellement allouer un cluster pour le répertoire + gérer l’extension du répertoire si on manque de place. J’ai préféré sécuriser d’abord la partie “write file” correctement, parce que c’est déjà la partie la plus sensible.
+
+---
+
+## Les Fonctions importantes 
+
+La première étape, c’est `parse_bpb`. C’est là que je lis les champs essentiels du BPB directement dans les bytes du secteur 0. Sans ça, je ne peux pas calculer où se trouve la FAT ni où se trouve la zone data.
+
+Ensuite, `Fat32::new` et `Fat32Mut::new` construisent une vue cohérente du volume. Elles stockent les paramètres dont tout le reste a besoin, comme la taille d’un cluster et les offsets de base.
+
+La logique la plus importante au quotidien, c’est la conversion cluster → offset. C’est ce qui me permet de lire un cluster avec `read_cluster`, donc de lire un répertoire ou le contenu d’un fichier.
+
+Pour la navigation, `open_path` est centrale. Elle prend un chemin absolu comme `/DIR/NOTE.TXT` et avance segment par segment. À chaque segment, je liste le répertoire courant, je compare les noms, et je passe au cluster suivant. Je normalise en majuscules pour être cohérent avec le comportement FAT sur les noms courts.
+
+Pour lister, `list_dir_cluster` lit la chaîne de clusters du répertoire via la FAT, puis parcourt les entrées 32 bytes par 32 bytes. C’est l’étape où je reconstruis les `DirEntry`.
+
+Pour lire, `read_file` suit la chaîne de clusters d’un fichier et reconstruit le contenu jusqu’à la taille annoncée. Je mets aussi une limite maximale de clusters parcourus pour éviter une boucle infinie sur une image corrompue.
+
+Et pour l’écriture, la fonction la plus importante est `write_file_by_path`. Elle vérifie le chemin, récupère le répertoire parent, cherche si le fichier existe, libère l’ancienne chaîne si besoin, alloue des clusters libres, écrit les bytes dans la data, puis met à jour (ou crée) l’entrée de répertoire. Ensuite, comme la CLI sauvegarde le buffer modifié dans `disk.img`, l’écriture est permanente.
+
+---
+
+## Tests
+
+J’ai construit des tests obligatoires avec `cargo test`. Pour ça, j’ai une petite image FAT32 synthétique en mémoire. Elle contient un BPB minimal, une FAT cohérente, une racine avec `HELLO.TXT` et un dossier `DIR`, et quelques clusters libres.
+
+L’intérêt de cette approche, c’est que je contrôle totalement l’image. Je peux valider la lecture, la résolution de chemin, les erreurs attendues, et aussi l’écriture. Par exemple, je teste qu’un fichier peut être créé, qu’un fichier peut être écrasé, et que l’ancienne chaîne de clusters est bien libérée dans la FAT.
+
+---
+
+## Créer une image FAT32 réelle pour tester
+
+Je commence par créer un fichier image rempli de zéros avec `dd`.
+
+```bash
 dd if=/dev/zero of=disk.img bs=1M count=64
-
-### Formater l'image en FAT32 :
-
 ```
+
+Ensuite j’installe l’outil de formatage et je formate l’image en FAT32.
+
+```bash
 sudo apt update
 sudo apt install dosfstools
-```
-
-Puis : 
-
-```
 mkfs.vfat -F 32 disk.img
 ```
 
-### Monter l'image comme un vrai disque : 
+Je monte l’image en loop pour ajouter des fichiers.
 
-```
+```bash
 sudo mkdir -p /mnt/fat32_test
 sudo mount -o loop disk.img /mnt/fat32_test
 ```
 
-### Créer quelques fichiers / répertoires pour tester
+Je crée du contenu de test.
 
-
-```
-# fichier à la racine
-echo "Hello FAT32" | sudo tee /mnt/fat32_test/HELLO.TXT
-
-# un dossier
+```bash
+echo "Hello FAT32" | sudo tee /mnt/fat32_test/HELLO.TXT > /dev/null
 sudo mkdir -p /mnt/fat32_test/DIR
-
-# un fichier dans DIR
-echo "Inside DIR" | sudo tee /mnt/fat32_test/DIR/NOTE.TXT
+echo "Inside DIR" | sudo tee /mnt/fat32_test/DIR/NOTE.TXT > /dev/null
 ```
 
-On peux vérifier : 
+Je démonte l’image avant de la passer à la CLI.
 
-```
-ls -l /mnt/fat32_test
-ls -l /mnt/fat32_test/DIR
-```
-
-!!!! Très important avant d'utiliser le bianire : 
-
-```
+```bash
 sudo umount /mnt/fat32_test
 ```
 
-À partir de là, le fichier disk.img dans le projet contient un vrai volume FAT32 valide.
+---
 
+## Lancer les tests
 
-
-Tester le binaire : 
-
+```bash
+cargo test
 ```
+
+Si je veux voir les sorties :
+
+```bash
+cargo test -- --nocapture
+```
+
+---
+
+## Utiliser la CLI
+
+Je compile en release :
+
+```bash
 cargo build --release
 ```
 
-# mode "one shot"
+Je liste et je lis :
+
+```bash
 ./target/release/fat32_cli --file disk.img --ls /
-./target/release/fat32_cli --file disk.img --ls DIR
 ./target/release/fat32_cli --file disk.img --cat /HELLO.TXT
-./target/release/fat32_cli --file disk.img --cat DIR/NOTE.TXT
+```
 
-# mode shell 
+Je peux aussi écrire un fichier dans l’image (c’est persistant) :
+
+```bash
+echo "DATA" > local.txt
+./target/release/fat32_cli --file disk.img --put /NEW.TXT local.txt
+./target/release/fat32_cli --file disk.img --cat /NEW.TXT
+```
+
+Je peux enfin utiliser le mode shell pour naviguer comme dans un mini terminal :
+
+```bash
 ./target/release/fat32_cli --file disk.img
-
-puis : 
-```
-fat32:/> ls
-fat32:/> cd DIR
-fat32:/DIR> ls
-fat32:/DIR> cat NOTE.TXT
-fat32:/DIR> pwd
-fat32:/DIR> exit
 ```
 
+---
 
 ## Bonus Miri
 
-Le sujet mentionne que Miri est un bonus. J’ai choisi de l’essayer pour montrer une démarche qualité supplémentaire. Cela ne remplace pas les tests classiques, mais apporte une vérification mémoire plus stricte.
+J’ai lancé Miri pour faire une vérification mémoire plus stricte. Pour ça, j’ai installé le nightly, ajouté Miri, et fait le setup.
 
-
-Installation de Miri :
-
-```
+```bash
+rustup toolchain install nightly
 rustup +nightly component add miri
-```
-
-Puis lancement :
-
-```
+rustup +nightly miri setup
 cargo +nightly miri test
 ```

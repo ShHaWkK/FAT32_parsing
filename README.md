@@ -158,6 +158,18 @@ Je peux enfin utiliser le mode shell pour naviguer comme dans un mini terminal :
 ./target/release/fat32_cli --file disk.img
 ```
 
+puis : 
+
+```
+fat32:/> ls
+fat32:/> cd DIR
+fat32:/DIR> ls
+fat32:/DIR> cat NOTE.TXT
+fat32:/DIR> pwd
+fat32:/DIR> exit
+
+```
+
 ---
 
 ## Bonus Miri

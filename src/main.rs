@@ -1,38 +1,34 @@
-use fat32_parser::Fat32;
+use fat32_parser::{Fat32, Fat32Mut};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 
 fn print_usage() {
     eprintln!(
-"Usage:
-  fat32_cli --file <dump_fat32> [--ls <chemin>] [--cat <chemin_fichier>]
+        "Usage:
+  fat32_cli --file <disk.img> [--ls <path>] [--cat <path>] [--put <fat_path> <host_file>]
 
-Exemples :
-  fat32_cli --file disk.img
+Exemples:
   fat32_cli --file disk.img --ls /
-  fat32_cli --file disk.img --ls DIR
-  fat32_cli --file disk.img --cat HELLO.TXT
+  fat32_cli --file disk.img --cat /HELLO.TXT
+  fat32_cli --file disk.img --put /NEW.TXT ./local.txt
 
-Sans --ls / --cat :
-  ls chemin       - liste un répertoire (absolu ou relatif)
-  cat chemin      - affiche un fichier
-  cd chemin       - change de répertoire courant
-  pwd   - affiche le répertoire courant
-  help
-  exit"
+Mode shell:
+  fat32_cli --file disk.img
+  (puis: ls, cd, cat, put, pwd, help, exit)"
     );
 }
 
 fn print_shell_help() {
     println!(
-"Commandes :
-  ls [chemin]       - lister un répertoire
-  cat <chemin>      - lire un fichier
-  cd [chemin]       - changer de répertoire courant
-  pwd               - afficher le répertoire courant
-  help              - cette aide
-  exit              - quitter"
+        "Commandes:
+  ls [path]            - lister un répertoire
+  cat <path>           - lire un fichier
+  cd [path]            - changer de répertoire courant
+  put <fat_path> <src> - écrire un fichier dans l'image (persistant)
+  pwd                  - afficher le répertoire courant
+  help                 - cette aide
+  exit                 - quitter"
     );
 }
 
@@ -41,20 +37,24 @@ fn main() {
 
     let mut dump_path: Option<String> = None;
     let mut command: Option<String> = None;
-    let mut target_path: Option<String> = None;
+    let mut target_a: Option<String> = None;
+    let mut target_b: Option<String> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--file" | "-f" => {
-                dump_path = args.next();
-            }
+            "--file" | "-f" => dump_path = args.next(),
             "--ls" => {
                 command = Some("ls".to_string());
-                target_path = args.next();
+                target_a = args.next();
             }
             "--cat" => {
                 command = Some("cat".to_string());
-                target_path = args.next();
+                target_a = args.next();
+            }
+            "--put" => {
+                command = Some("put".to_string());
+                target_a = args.next();
+                target_b = args.next();
             }
             _ => {
                 eprintln!("Argument inconnu : {arg}");
@@ -72,49 +72,103 @@ fn main() {
         }
     };
 
-    let data =
-        fs::read(&dump_path).expect("Impossible de lire le fichier dump");
-
-    let fs = match Fat32::new(&data) {
-        Ok(fs) => fs,
+    let mut data = match fs::read(&dump_path) {
+        Ok(v) => v,
         Err(e) => {
-            eprintln!(
-                "Erreur lors de l'analyse du dump FAT32: {:?}.",
-                e
-            );
+            eprintln!("Impossible de lire {dump_path}: {e}");
             return;
         }
     };
 
     match command.as_deref() {
         Some("ls") => {
+            let ro = match Fat32::new(&data) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    eprintln!("Erreur FAT32: {e:?}");
+                    return;
+                }
+            };
             let cwd = "/";
-            let path = target_path
+            let path = target_a
                 .as_deref()
                 .map(|p| resolve_path(cwd, p))
-                .unwrap_or_else(|| cwd.to_string());
-            run_ls(&fs, &path);
+                .unwrap_or_else(|| "/".to_string());
+            run_ls(&ro, &path);
         }
         Some("cat") => {
+            let ro = match Fat32::new(&data) {
+                Ok(fs) => fs,
+                Err(e) => {
+                    eprintln!("Erreur FAT32: {e:?}");
+                    return;
+                }
+            };
             let cwd = "/";
-            let rel = match target_path {
+            let rel = match target_a {
                 Some(p) => p,
                 None => {
-                    eprintln!("--cat nécessite un chemin de fichier");
+                    eprintln!("--cat nécessite un chemin");
                     print_usage();
                     return;
                 }
             };
             let path = resolve_path(cwd, &rel);
-            run_cat(&fs, &path);
+            run_cat(&ro, &path);
+        }
+        Some("put") => {
+            let fat_path = match target_a {
+                Some(p) => p,
+                None => {
+                    eprintln!("--put nécessite un chemin FAT32");
+                    print_usage();
+                    return;
+                }
+            };
+            let src = match target_b {
+                Some(p) => p,
+                None => {
+                    eprintln!("--put nécessite un fichier source");
+                    print_usage();
+                    return;
+                }
+            };
+
+            let content = match fs::read(&src) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Impossible de lire {src}: {e}");
+                    return;
+                }
+            };
+
+            {
+                let mut rw = match Fat32Mut::new(&mut data) {
+                    Ok(fs) => fs,
+                    Err(e) => {
+                        eprintln!("Erreur FAT32: {e:?}");
+                        return;
+                    }
+                };
+
+                if let Err(e) = rw.write_file_by_path(&fat_path, &content) {
+                    eprintln!("Erreur put {fat_path}: {e:?}");
+                    return;
+                }
+            }
+
+            if let Err(e) = fs::write(&dump_path, &data) {
+                eprintln!("Impossible d'écrire {dump_path}: {e}");
+                return;
+            }
+
+            println!("OK: {src} -> {fat_path} (image mise à jour)");
         }
         Some(other) => {
             eprintln!("Commande inconnue : {other}");
             print_usage();
         }
-        None => {
-            run_shell(&fs);
-        }
+        None => run_shell(&dump_path, &mut data),
     }
 }
 
@@ -125,7 +179,6 @@ fn main() {
 /// - current="/DIR", path="FILE.TXT"    -> "/DIR/FILE.TXT"
 /// - current="/",     path="/AUTRE/XX"  -> "/AUTRE/XX"
 fn resolve_path(current: &str, path: &str) -> String {
-    // On stocke des String pour éviter les problèmes connu de lifetimes
     let mut components: Vec<String> = Vec::new();
 
     if path.starts_with('/') {
@@ -150,16 +203,13 @@ fn resolve_path(current: &str, path: &str) -> String {
     }
 }
 
-/// Ajoute un composant de chemin dans la liste (gère ".", ".." et vide).
 fn push_component(components: &mut Vec<String>, part: &str) {
     match part {
         "" | "." => {}
         ".." => {
             components.pop();
         }
-        _ => {
-            components.push(part.to_string());
-        }
+        _ => components.push(part.to_string()),
     }
 }
 
@@ -172,9 +222,7 @@ fn run_ls(fs: &Fat32, path: &str) {
                 println!("{kind} {:<24} {:>8} bytes", e.name, e.size);
             }
         }
-        Err(e) => {
-            eprintln!("Erreur list_dir_path({path:?}): {:?}", e);
-        }
+        Err(e) => eprintln!("Erreur ls {path}: {e:?}"),
     }
 }
 
@@ -183,16 +231,12 @@ fn run_cat(fs: &Fat32, path: &str) {
         Ok(Some(bytes)) => {
             print!("{}", String::from_utf8_lossy(&bytes));
         }
-        Ok(None) => {
-            eprintln!("Fichier introuvable : {path}");
-        }
-        Err(e) => {
-            eprintln!("Erreur read_file_by_path({path:?}): {:?}", e);
-        }
+        Ok(None) => eprintln!("Fichier introuvable : {path}"),
+        Err(e) => eprintln!("Erreur cat {path}: {e:?}"),
     }
 }
 
-fn run_shell(fs: &Fat32) {
+fn run_shell(img_path: &str, data: &mut Vec<u8>) {
     println!("FAT32 shell. Tapez 'help' pour l'aide, 'exit' pour quitter.");
 
     let stdin = io::stdin();
@@ -209,7 +253,6 @@ fn run_shell(fs: &Fat32) {
             Ok(n) => n,
             Err(_) => break,
         };
-
         if n == 0 {
             break;
         }
@@ -223,58 +266,110 @@ fn run_shell(fs: &Fat32) {
         let cmd = parts.next().unwrap();
 
         match cmd {
-            "exit" | "quit" => {
-                break;
-            }
-            "help" => {
-                print_shell_help();
-            }
-            "pwd" => {
-                println!("{current_dir}");
-            }
+            "exit" | "quit" => break,
+            "help" => print_shell_help(),
+            "pwd" => println!("{current_dir}"),
             "ls" => {
+                let ro = match Fat32::new(&data) {
+                    Ok(fs) => fs,
+                    Err(e) => {
+                        println!("Erreur FAT32: {e:?}");
+                        continue;
+                    }
+                };
+
                 let path = if let Some(p) = parts.next() {
                     resolve_path(&current_dir, p)
                 } else {
                     current_dir.clone()
                 };
-                run_ls(fs, &path);
+                run_ls(&ro, &path);
             }
             "cat" => {
+                let ro = match Fat32::new(&data) {
+                    Ok(fs) => fs,
+                    Err(e) => {
+                        println!("Erreur FAT32: {e:?}");
+                        continue;
+                    }
+                };
+
                 if let Some(p) = parts.next() {
                     let path = resolve_path(&current_dir, p);
-                    run_cat(fs, &path);
+                    run_cat(&ro, &path);
                 } else {
-                    println!("Usage: cat <chemin_fichier>");
+                    println!("Usage: cat <path>");
                 }
             }
             "cd" => {
+                let ro = match Fat32::new(&data) {
+                    Ok(fs) => fs,
+                    Err(e) => {
+                        println!("Erreur FAT32: {e:?}");
+                        continue;
+                    }
+                };
+
                 let target = if let Some(p) = parts.next() {
                     resolve_path(&current_dir, p)
                 } else {
                     "/".to_string()
                 };
 
-                match fs.open_path(&target) {
-                    Ok(Some(entry)) if entry.is_dir() => {
-                        current_dir = target;
-                    }
-                    Ok(Some(_)) => {
-                        println!("{target} n'est pas un répertoire");
-                    }
-                    Ok(None) => {
-                        println!("Répertoire introuvable : {target}");
-                    }
-                    Err(e) => {
-                        println!("Erreur cd vers {target:?}: {:?}", e);
-                    }
+                match ro.open_path(&target) {
+                    Ok(Some(entry)) if entry.is_dir() => current_dir = target,
+                    Ok(Some(_)) => println!("{target} n'est pas un répertoire"),
+                    Ok(None) => println!("Répertoire introuvable : {target}"),
+                    Err(e) => println!("Erreur cd vers {target}: {e:?}"),
                 }
             }
-            _ => {
-                println!(
-                    "Commande inconnue : {cmd}. Tapez 'help' pour la liste des commandes."
-                );
+            "put" => {
+                let fat_path = match parts.next() {
+                    Some(p) => resolve_path(&current_dir, p),
+                    None => {
+                        println!("Usage: put <fat_path> <src_file>");
+                        continue;
+                    }
+                };
+                let src = match parts.next() {
+                    Some(p) => p.to_string(),
+                    None => {
+                        println!("Usage: put <fat_path> <src_file>");
+                        continue;
+                    }
+                };
+
+                let content = match fs::read(&src) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        println!("Impossible de lire {src}: {e}");
+                        continue;
+                    }
+                };
+
+                {
+                    let mut rw = match Fat32Mut::new(data) {
+                        Ok(fs) => fs,
+                        Err(e) => {
+                            println!("Erreur FAT32: {e:?}");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = rw.write_file_by_path(&fat_path, &content) {
+                        println!("Erreur put {fat_path}: {e:?}");
+                        continue;
+                    }
+                }
+
+                if let Err(e) = fs::write(img_path, &*data) {
+                    println!("Impossible d'écrire {img_path}: {e}");
+                    continue;
+                }
+
+                println!("OK: {src} -> {fat_path} (image mise à jour)");
             }
+            _ => println!("Commande inconnue: {cmd}. Tapez 'help'."),
         }
     }
 }

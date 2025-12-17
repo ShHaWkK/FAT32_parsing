@@ -1,9 +1,10 @@
 # FAT32_parsing
 
-Dans ce projet, j’ai réimplémenté une partie de FAT32 en Rust à partir d’une image disque brute comme `disk.img`. L’idée de départ était simple : je voulais pouvoir charger le disque en mémoire, comprendre sa structure “à la main”, puis reconstruire l’accès aux fichiers comme un vrai système de fichiers le ferait. Au final, je peux naviguer dans l’arborescence, lister des répertoires, lire des fichiers, et aussi écrire un fichier dans l’image de façon persistante (donc le contenu reste dans `disk.img` après le programme).
+Ce projet est une réimplémentation FAT32 en Rust. Mon but était de travailler sur une image disque brute (par exemple disk.img) et de reconstruire la logique FAT32 directement à partir des bytes. Je voulais pouvoir faire trois choses comme dans un mini système de fichiers : lister un répertoire (comme ls), lire un fichier (comme cat), et me déplacer dans l’arborescence (comme cd et pwd). Une fois que la lecture fonctionnait bien, j’ai ajouté une écriture simple pour pouvoir créer ou écraser un fichier, et surtout rendre la modification persistante dans l’image.
 
-Je me suis volontairement limité à une version claire et contrôlée. Je gère les noms courts FAT (format 8.3), parce que ça permet déjà de faire une implémentation complète et solide sans tomber dans toute la complexité des Long File Names. L’objectif était d’avoir quelque chose de propre et démontrable, pas de couvrir tout le standard.
+Le point important du sujet, c’est le no_std. Donc j’ai séparé les rôles de manière simple. Toute la logique FAT32 est dans une bibliothèque fat32_parser qui fonctionne en no_std et n’utilise que core et alloc. Le binaire src/main.rs sert uniquement à ouvrir le fichier image, afficher les résultats, et proposer une petite interface. La CLI utilise std, mais elle ne contient pas la logique FAT32. Comme ça, je garde un cœur réutilisable et conforme à l’objectif no_std.
 
+Je ne gère pas les Long File Names (LFN). Je ne parse et n’écris que les entrées courtes 8.3, parce que c’est un périmètre clair et je préfère une implémentation robuste et compréhensible plutôt qu’une implémentation incomplète sur tous les cas avancés.
 ---
 
 ## Comment j’ai travaillé
@@ -68,12 +69,13 @@ Et pour l’écriture, la fonction la plus importante est `write_file_by_path`. 
 
 ---
 
-## Tests
+## Tests et Rustdocs
 
-J’ai construit des tests obligatoires avec `cargo test`. Pour ça, j’ai une petite image FAT32 synthétique en mémoire. Elle contient un BPB minimal, une FAT cohérente, une racine avec `HELLO.TXT` et un dossier `DIR`, et quelques clusters libres.
+Les tests unitaires construisent une petite image FAT32 en mémoire. Ça me permet de tester new, le listage, la résolution de chemin, la lecture, et l’écriture, sans dépendre d’un fichier externe.
 
-L’intérêt de cette approche, c’est que je contrôle totalement l’image. Je peux valider la lecture, la résolution de chemin, les erreurs attendues, et aussi l’écriture. Par exemple, je teste qu’un fichier peut être créé, qu’un fichier peut être écrasé, et que l’ancienne chaîne de clusters est bien libérée dans la FAT.
+J’ai aussi un test d’intégration optionnel (tests/disk_img.rs). S’il trouve tests/disk.img, il le lit et vérifie que le parsing fonctionne aussi sur une vraie image FAT32. Si le fichier n’existe pas, le test est ignoré pour ne pas casser cargo test.
 
+J’ai commenté les fonctions importantes avec Rustdoc (/// et //!) pour que la doc générée explique clairement ce que fait chaque partie.
 ---
 
 ## Créer une image FAT32 réelle pour tester
@@ -138,13 +140,16 @@ cargo build --release
 ```
 
 Je liste et je lis :
-
+Mode direct :
 ```bash
 ./target/release/fat32_cli --file disk.img --ls /
 ./target/release/fat32_cli --file disk.img --cat /HELLO.TXT
+./target/release/fat32_cli --file disk.img --ls /DIR
+./target/release/fat32_cli --file disk.img --cat /DIR/NOTE.TXT
 ```
 
 Je peux aussi écrire un fichier dans l’image (c’est persistant) :
+Écriture persistante :
 
 ```bash
 echo "DATA" > local.txt
@@ -161,11 +166,12 @@ Je peux enfin utiliser le mode shell pour naviguer comme dans un mini terminal :
 puis : 
 
 ```
-fat32:/> ls
-fat32:/> cd DIR
-fat32:/DIR> ls
-fat32:/DIR> cat NOTE.TXT
-fat32:/DIR> pwd
+fat32:/> ls 
+fat32:/> cd DIR 
+fat32:/DIR> ls 
+fat32:/DIR> cat NOTE.TXT 
+fat32:/DIR> put NEW.TXT ./local.txt 
+fat32:/DIR> pwd 
 fat32:/DIR> exit
 
 ```

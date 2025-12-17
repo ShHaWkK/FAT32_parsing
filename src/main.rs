@@ -1,8 +1,22 @@
+//! Petite CLI pour explorer et modifier une image FAT32.
+//!
+//! Cette CLI s’appuie sur la bibliothèque `fat32_parser`:
+//! - lecture: `ls`, `cat`, navigation avec `cd` et `pwd`
+//! - écriture simple: `put` pour créer/écraser un fichier 8.3
+//! - mode non interactif via options ou mode shell interactif
+//! 
+//! Exemple rapide:
+//! ```
+//! fat32_cli --file disk.img --ls /
+//! fat32_cli --file disk.img --cat /HELLO.TXT
+//! fat32_cli --file disk.img --put /NEW.TXT ./local.txt
+//! ```
 use fat32_parser::{Fat32, Fat32Mut};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 
+/// Affiche l’usage de la CLI avec les commandes disponibles.
 fn print_usage() {
     eprintln!(
         "Usage:
@@ -19,6 +33,7 @@ Mode shell:
     );
 }
 
+/// Affiche l’aide du mode shell interactif.
 fn print_shell_help() {
     println!(
         "Commandes:
@@ -32,6 +47,9 @@ fn print_shell_help() {
     );
 }
 
+/// Point d’entrée de la CLI: parse les arguments,
+/// ouvre l’image en mémoire, puis exécute la commande
+/// demandée ou bascule en mode shell interactif.
 fn main() {
     let mut args = env::args().skip(1);
 
@@ -203,6 +221,7 @@ fn resolve_path(current: &str, path: &str) -> String {
     }
 }
 
+/// Ajoute un composant de chemin en gérant `.` et `..`.
 fn push_component(components: &mut Vec<String>, part: &str) {
     match part {
         "" | "." => {}
@@ -213,6 +232,8 @@ fn push_component(components: &mut Vec<String>, part: &str) {
     }
 }
 
+/// Liste un répertoire et affiche une vue simple
+/// (type + nom + taille) pour chaque entrée.
 fn run_ls(fs: &Fat32, path: &str) {
     match fs.list_dir_path(path) {
         Ok(entries) => {
@@ -226,6 +247,7 @@ fn run_ls(fs: &Fat32, path: &str) {
     }
 }
 
+/// Lit un fichier et écrit son contenu sur la sortie standard.
 fn run_cat(fs: &Fat32, path: &str) {
     match fs.read_file_by_path(path) {
         Ok(Some(bytes)) => {
@@ -236,6 +258,8 @@ fn run_cat(fs: &Fat32, path: &str) {
     }
 }
 
+/// Lance un petit shell interactif pour manipuler l’image:
+/// navigation (`cd`, `pwd`), listage (`ls`), lecture (`cat`) et écriture (`put`).
 fn run_shell(img_path: &str, data: &mut Vec<u8>) {
     println!("FAT32 shell. Tapez 'help' pour l'aide, 'exit' pour quitter.");
 
@@ -371,5 +395,28 @@ fn run_shell(img_path: &str, data: &mut Vec<u8>) {
             }
             _ => println!("Commande inconnue: {cmd}. Tapez 'help'."),
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_path_tests {
+    use super::resolve_path;
+
+    #[test]
+    fn chemin_parent_depuis_dir() {
+        let r = resolve_path("/DIR", "..");
+        assert_eq!(r, "/");
+    }
+
+    #[test]
+    fn chemin_courant_point_file() {
+        let r = resolve_path("/DIR", "./FILE.TXT");
+        assert_eq!(r, "/DIR/FILE.TXT");
+    }
+
+    #[test]
+    fn chemin_absolu_ignore_courant() {
+        let r = resolve_path("/DIR", "/AUTRE/XX");
+        assert_eq!(r, "/AUTRE/XX");
     }
 }

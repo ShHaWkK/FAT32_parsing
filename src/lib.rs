@@ -766,6 +766,10 @@ impl<'a> Fat32Mut<'a> {
 // ---------- helpers BPB + path + nom 8.3 ----------
 
 #[derive(Clone, Copy)]
+/// Paramètres du BPB nécessaires pour naviguer dans le volume
+///
+/// On ne lit que ce qui sert à calculer les offsets et tailles comme par exemple : 
+/// taille de secteur, taille de cluster, FAT, cluster racine...
 struct BpbParams {
     bytes_per_sector: u16,
     sectors_per_cluster: u8,
@@ -775,6 +779,9 @@ struct BpbParams {
     root_cluster: u32,
 }
 
+/// Parse le BPB du secteur 0 et extrait les paramètres utiles.
+///
+/// Effectue des vérifications minimales pour éviter un état incohérent.
 fn parse_bpb(disk: &[u8]) -> Result<BpbParams, FatError> {
     if disk.len() < 512 {
         return Err(FatError::BufferTooSmall);
@@ -880,6 +887,7 @@ fn encode_short_name_8_3(name: &str) -> Result<([u8; 8], [u8; 3]), FatError> {
     Ok((n, e))
 }
 
+/// Division entière avec arrondi vers le haut.
 fn div_ceil(a: usize, b: usize) -> usize {
     if b == 0 {
         0
